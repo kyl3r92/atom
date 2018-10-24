@@ -3,8 +3,6 @@
 const dedent = require('dedent')
 const yargs = require('yargs')
 const {app} = require('electron')
-const path = require('path')
-const fs = require('fs-plus')
 
 module.exports = function parseCommandLine (processArgs) {
   const options = yargs(processArgs).wrap(yargs.terminalWidth())
@@ -12,12 +10,19 @@ module.exports = function parseCommandLine (processArgs) {
   options.usage(
     dedent`Atom Editor v${version}
 
-    Usage: atom [options] [path ...]
+    Usage:
+      atom [options] [path ...]
+      atom file[:line[:column]]
 
     One or more paths to files or folders may be specified. If there is an
     existing Atom window that contains all of the given folders, the paths
     will be opened in that window. Otherwise, they will be opened in a new
     window.
+
+    A file may be opened at the desired line (and optionally column) by
+    appending the numbers right after the file name, e.g. \`atom file:5:8\`.
+
+    Paths that start with \`atom://\` will be interpreted as URLs.
 
     Environment Variables:
 
@@ -41,12 +46,8 @@ module.exports = function parseCommandLine (processArgs) {
     'safe',
     'Do not load packages from ~/.atom/packages or ~/.atom/dev/packages.'
   )
-  options.boolean('portable').describe(
-    'portable',
-    'Set portable mode. Copies the ~/.atom folder to be a sibling of the installed Atom location if a .atom folder is not already there.'
-  )
   options.boolean('benchmark').describe('benchmark', 'Open a new window that runs the specified benchmarks.')
-  options.boolean('benchmark-test').describe('benchmark--test', 'Run a faster version of the benchmarks in headless mode.')
+  options.boolean('benchmark-test').describe('benchmark-test', 'Run a faster version of the benchmarks in headless mode.')
   options.alias('t', 'test').boolean('t').describe('t', 'Run the specified specs and exit with error code on failures.')
   options.alias('m', 'main-process').boolean('m').describe('m', 'Run the specified specs in the main process.')
   options.string('timeout').describe(
@@ -59,8 +60,19 @@ module.exports = function parseCommandLine (processArgs) {
   options.string('socket-path')
   options.string('user-data-dir')
   options.boolean('clear-window-state').describe('clear-window-state', 'Delete all Atom environment state.')
+  options.boolean('enable-electron-logging').describe('enable-electron-logging', 'Enable low-level logging messages from Electron.')
+  options.boolean('uri-handler')
 
-  const args = options.argv
+  let args = options.argv
+
+  // If --uri-handler is set, then we parse NOTHING else
+  if (args.uriHandler) {
+    args = {
+      uriHandler: true,
+      'uri-handler': true,
+      _: args._.filter(str => str.startsWith('atom://')).slice(0, 1)
+    }
+  }
 
   if (args.help) {
     process.stdout.write(options.help())
@@ -79,7 +91,6 @@ module.exports = function parseCommandLine (processArgs) {
 
   const addToLastWindow = args['add']
   const safeMode = args['safe']
-  const pathsToOpen = args._
   const benchmark = args['benchmark']
   const benchmarkTest = args['benchmark-test']
   const test = args['test']
@@ -103,27 +114,20 @@ module.exports = function parseCommandLine (processArgs) {
   const userDataDir = args['user-data-dir']
   const profileStartup = args['profile-startup']
   const clearWindowState = args['clear-window-state']
-  const urlsToOpen = []
-  const setPortable = args.portable
+  let pathsToOpen = []
+  let urlsToOpen = []
   let devMode = args['dev']
-  let devResourcePath = process.env.ATOM_DEV_RESOURCE_PATH || path.join(app.getPath('home'), 'github', 'atom')
-  let resourcePath = null
 
-  if (args['resource-path']) {
+  for (const path of args._) {
+    if (path.startsWith('atom://')) {
+      urlsToOpen.push(path)
+    } else {
+      pathsToOpen.push(path)
+    }
+  }
+
+  if (args.resourcePath || test) {
     devMode = true
-    resourcePath = args['resource-path']
-  }
-
-  if (test) {
-    devMode = true
-  }
-
-  if (devMode && !resourcePath) {
-    resourcePath = devResourcePath
-  }
-
-  if (!fs.statSyncNoException(resourcePath)) {
-    resourcePath = path.dirname(path.dirname(__dirname))
   }
 
   if (args['path-environment']) {
@@ -132,12 +136,7 @@ module.exports = function parseCommandLine (processArgs) {
     process.env.PATH = args['path-environment']
   }
 
-  resourcePath = normalizeDriveLetterName(resourcePath)
-  devResourcePath = normalizeDriveLetterName(devResourcePath)
-
   return {
-    resourcePath,
-    devResourcePath,
     pathsToOpen,
     urlsToOpen,
     executedFrom,
@@ -152,20 +151,11 @@ module.exports = function parseCommandLine (processArgs) {
     userDataDir,
     profileStartup,
     timeout,
-    setPortable,
     clearWindowState,
     addToLastWindow,
     mainProcess,
     benchmark,
     benchmarkTest,
     env: process.env
-  }
-}
-
-function normalizeDriveLetterName (filePath) {
-  if (process.platform === 'win32') {
-    return filePath.replace(/^([a-z]):/, ([driveLetter]) => driveLetter.toUpperCase() + ':')
-  } else {
-    return filePath
   }
 }

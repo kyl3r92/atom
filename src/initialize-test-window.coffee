@@ -18,14 +18,19 @@ module.exports = ({blobStore}) ->
   try
     path = require 'path'
     {ipcRenderer} = require 'electron'
-    {getWindowLoadSettings} = require './window-load-settings-helpers'
+    getWindowLoadSettings = require './get-window-load-settings'
+    CompileCache = require './compile-cache'
     AtomEnvironment = require '../src/atom-environment'
     ApplicationDelegate = require '../src/application-delegate'
     Clipboard = require '../src/clipboard'
     TextEditor = require '../src/text-editor'
-    require '../src/electron-shims'
+    {updateProcessEnv} = require('./update-process-env')
+    require './electron-shims'
 
-    {testRunnerPath, legacyTestRunnerPath, headless, logFile, testPaths} = getWindowLoadSettings()
+    ipcRenderer.on 'environment', (event, env) ->
+      updateProcessEnv(env)
+
+    {testRunnerPath, legacyTestRunnerPath, headless, logFile, testPaths, env} = getWindowLoadSettings()
 
     unless headless
       # Show window synchronously so a focusout doesn't fire on input elements
@@ -58,10 +63,20 @@ module.exports = ({blobStore}) ->
     require('module').globalPaths.push(exportsPath)
     process.env.NODE_PATH = exportsPath # Set NODE_PATH env variable since tasks may need it.
 
+    updateProcessEnv(env)
+
+    # Set up optional transpilation for packages under test if any
+    FindParentDir = require 'find-parent-dir'
+    if packageRoot = FindParentDir.sync(testPaths[0], 'package.json')
+      packageMetadata = require(path.join(packageRoot, 'package.json'))
+      if packageMetadata.atomTranspilers
+        CompileCache.addTranspilerConfigForPath(packageRoot, packageMetadata.name, packageMetadata, packageMetadata.atomTranspilers)
+
     document.title = "Spec Suite"
 
     clipboard = new Clipboard
     TextEditor.setClipboard(clipboard)
+    TextEditor.viewForItem = (item) -> atom.views.getView(item)
 
     testRunner = require(testRunnerPath)
     legacyTestRunner = require(legacyTestRunnerPath)
@@ -71,7 +86,10 @@ module.exports = ({blobStore}) ->
       params.clipboard = clipboard unless params.hasOwnProperty("clipboard")
       params.blobStore = blobStore unless params.hasOwnProperty("blobStore")
       params.onlyLoadBaseStyleSheets = true unless params.hasOwnProperty("onlyLoadBaseStyleSheets")
-      new AtomEnvironment(params)
+      atomEnvironment = new AtomEnvironment(params)
+      atomEnvironment.initialize(params)
+      TextEditor.setScheduler(atomEnvironment.views)
+      atomEnvironment
 
     promise = testRunner({
       logFile, headless, testPaths, buildAtomEnvironment, buildDefaultApplicationDelegate, legacyTestRunner

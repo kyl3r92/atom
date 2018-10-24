@@ -10,7 +10,7 @@ const glob = require('glob')
 const includePathInPackagedApp = require('./include-path-in-packaged-app')
 
 module.exports = function () {
-  console.log(`Copying assets to ${CONFIG.intermediateAppPath}`);
+  console.log(`Copying assets to ${CONFIG.intermediateAppPath}`)
   let srcPaths = [
     path.join(CONFIG.repositoryRootPath, 'benchmarks', 'benchmark-runner.js'),
     path.join(CONFIG.repositoryRootPath, 'dot-atom'),
@@ -23,7 +23,7 @@ module.exports = function () {
   ]
   srcPaths = srcPaths.concat(glob.sync(path.join(CONFIG.repositoryRootPath, 'spec', '*.*'), {ignore: path.join('**', '*-spec.*')}))
   for (let srcPath of srcPaths) {
-    fs.copySync(srcPath, computeDestinationPath(srcPath), {filter: includePathInPackagedApp})
+    fs.copySync(srcPath, computeDestinationPath(srcPath), {filter: includePathInPackagedApp, dereference: true})
   }
 
   fs.copySync(

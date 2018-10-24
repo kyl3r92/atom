@@ -1,12 +1,15 @@
 const {app} = require('electron')
-const fs = require('fs-plus')
 const nslog = require('nslog')
 const path = require('path')
-const temp = require('temp')
+const temp = require('temp').track()
 const parseCommandLine = require('./parse-command-line')
 const startCrashReporter = require('../crash-reporter-start')
+const atomPaths = require('../atom-paths')
+const fs = require('fs')
+const CSON = require('season')
+const Config = require('../config')
 
-module.exports = function start (resourcePath, startTime) {
+module.exports = function start (resourcePath, devResourcePath, startTime) {
   global.shellStartTime = startTime
 
   process.on('uncaughtException', function (error = {}) {
@@ -19,12 +22,33 @@ module.exports = function start (resourcePath, startTime) {
     }
   })
 
+  process.on('unhandledRejection', function (error = {}) {
+    if (error.message != null) {
+      console.log(error.message)
+    }
+
+    if (error.stack != null) {
+      console.log(error.stack)
+    }
+  })
+
   const previousConsoleLog = console.log
   console.log = nslog
 
+  app.commandLine.appendSwitch('enable-experimental-web-platform-features')
+
   const args = parseCommandLine(process.argv.slice(1))
-  setupAtomHome(args)
-  setupCompileCache()
+  args.resourcePath = normalizeDriveLetterName(resourcePath)
+  args.devResourcePath = normalizeDriveLetterName(devResourcePath)
+
+  atomPaths.setAtomHome(app.getPath('home'))
+  atomPaths.setUserData(app)
+
+  const config = getConfig()
+  const colorProfile = config.get('core.colorProfile')
+  if (colorProfile && colorProfile !== 'default') {
+    app.commandLine.appendSwitch('force-color-profile', colorProfile)
+  }
 
   if (handleStartupEventWithSquirrel()) {
     return
@@ -39,7 +63,7 @@ module.exports = function start (resourcePath, startTime) {
   }
 
   // NB: This prevents Win10 from showing dupe items in the taskbar
-  app.setAppUserModelId('com.squirrel.atom.atom')
+  app.setAppUserModelId('com.squirrel.atom.' + process.arch)
 
   function addPathToOpen (event, pathToOpen) {
     event.preventDefault()
@@ -79,37 +103,28 @@ function handleStartupEventWithSquirrel () {
   return SquirrelUpdate.handleStartupEvent(app, squirrelCommand)
 }
 
-function setupAtomHome ({setPortable}) {
-  if (process.env.ATOM_HOME) {
-    return
+function getConfig () {
+  const config = new Config()
+
+  let configFilePath
+  if (fs.existsSync(path.join(process.env.ATOM_HOME, 'config.json'))) {
+    configFilePath = path.join(process.env.ATOM_HOME, 'config.json')
+  } else if (fs.existsSync(path.join(process.env.ATOM_HOME, 'config.cson'))) {
+    configFilePath = path.join(process.env.ATOM_HOME, 'config.cson')
   }
 
-  let atomHome = path.join(app.getPath('home'), '.atom')
-  const AtomPortable = require('./atom-portable')
-
-  if (setPortable && !AtomPortable.isPortableInstall(process.platform, process.env.ATOM_HOME, atomHome)) {
-    try {
-      AtomPortable.setPortable(atomHome)
-    } catch (error) {
-      console.log(`Failed copying portable directory '${atomHome}' to '${AtomPortable.getPortableAtomHomePath()}'`)
-      console.log(`${error.message} ${error.stack}`)
-    }
+  if (configFilePath) {
+    const configFileData = CSON.readFileSync(configFilePath)
+    config.resetUserSettings(configFileData)
   }
 
-  if (AtomPortable.isPortableInstall(process.platform, process.env.ATOM_HOME, atomHome)) {
-    atomHome = AtomPortable.getPortableAtomHomePath()
-  }
-
-  try {
-    atomHome = fs.realpathSync(atomHome)
-  } catch (e) {
-    // Don't throw an error if atomHome doesn't exist.
-  }
-
-  process.env.ATOM_HOME = atomHome
+  return config
 }
 
-function setupCompileCache () {
-  const CompileCache = require('../compile-cache')
-  CompileCache.setAtomHomeDirectory(process.env.ATOM_HOME)
+function normalizeDriveLetterName (filePath) {
+  if (process.platform === 'win32' && filePath) {
+    return filePath.replace(/^([a-z]):/, ([driveLetter]) => driveLetter.toUpperCase() + ':')
+  } else {
+    return filePath
+  }
 }

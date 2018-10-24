@@ -7,6 +7,8 @@ const listen = require('./delegated-listener')
 // This tooltip class is derived from Bootstrap 3, but modified to not require
 // jQuery, which is an expensive dependency we want to eliminate.
 
+var followThroughTimer = null
+
 var Tooltip = function (element, options, viewRegistry) {
   this.options = null
   this.enabled = null
@@ -21,7 +23,7 @@ var Tooltip = function (element, options, viewRegistry) {
 
 Tooltip.VERSION = '3.3.5'
 
-Tooltip.TRANSITION_DURATION = 150
+Tooltip.FOLLOW_THROUGH_DURATION = 300
 
 Tooltip.DEFAULTS = {
   animation: true,
@@ -44,6 +46,7 @@ Tooltip.prototype.init = function (element, options) {
   this.element = element
   this.options = this.getOptions(options)
   this.disposables = new EventKit.CompositeDisposable()
+  this.mutationObserver = new MutationObserver(this.handleMutations.bind(this))
 
   if (this.options.viewport) {
     if (typeof this.options.viewport === 'function') {
@@ -79,6 +82,7 @@ Tooltip.prototype.init = function (element, options) {
       var eventIn, eventOut
 
       if (trigger === 'hover') {
+        this.hideOnKeydownOutsideOfTooltip = () => this.hide()
         if (this.options.selector) {
           eventIn = 'mouseover'
           eventOut = 'mouseout'
@@ -99,6 +103,24 @@ Tooltip.prototype.init = function (element, options) {
   this.options.selector
     ? (this._options = extend({}, this.options, { trigger: 'manual', selector: '' }))
     : this.fixTitle()
+}
+
+Tooltip.prototype.startObservingMutations = function () {
+  this.mutationObserver.observe(this.getTooltipElement(), {
+    attributes: true, childList: true, characterData: true, subtree: true
+  })
+}
+
+Tooltip.prototype.stopObservingMutations = function () {
+  this.mutationObserver.disconnect()
+}
+
+Tooltip.prototype.handleMutations = function () {
+  window.requestAnimationFrame(function () {
+    this.stopObservingMutations()
+    this.recalculatePosition()
+    this.startObservingMutations()
+  }.bind(this))
 }
 
 Tooltip.prototype.getDefaults = function () {
@@ -151,7 +173,11 @@ Tooltip.prototype.enter = function (event) {
 
   this.hoverState = 'in'
 
-  if (!this.options.delay || !this.options.delay.show) return this.show()
+  if (!this.options.delay ||
+      !this.options.delay.show ||
+      followThroughTimer) {
+    return this.show()
+  }
 
   this.timeout = setTimeout(function () {
     if (this.hoverState === 'in') this.show()
@@ -195,7 +221,12 @@ Tooltip.prototype.show = function () {
       window.addEventListener('click', this.hideOnClickOutsideOfTooltip, true)
     }
 
+    if (this.hideOnKeydownOutsideOfTooltip) {
+      window.addEventListener('keydown', this.hideOnKeydownOutsideOfTooltip, true)
+    }
+
     var tip = this.getTooltipElement()
+    this.startObservingMutations()
     var tipId = this.getUID('tooltip')
 
     this.setContent()
@@ -333,7 +364,12 @@ Tooltip.prototype.hide = function (callback) {
     window.removeEventListener('click', this.hideOnClickOutsideOfTooltip, true)
   }
 
+  if (this.hideOnKeydownOutsideOfTooltip) {
+    window.removeEventListener('keydown', this.hideOnKeydownOutsideOfTooltip, true)
+  }
+
   this.tip && this.tip.classList.remove('in')
+  this.stopObservingMutations()
 
   if (this.hoverState !== 'in') this.tip && this.tip.remove()
 
@@ -342,6 +378,14 @@ Tooltip.prototype.hide = function (callback) {
   callback && callback()
 
   this.hoverState = null
+
+  clearTimeout(followThroughTimer)
+  followThroughTimer = setTimeout(
+    function () {
+      followThroughTimer = null
+    },
+    Tooltip.FOLLOW_THROUGH_DURATION
+  )
 
   return this
 }
@@ -466,6 +510,41 @@ Tooltip.prototype.getDelegateComponent = function (element) {
     tooltipComponentsByElement.set(element, component)
   }
   return component
+}
+
+Tooltip.prototype.recalculatePosition = function () {
+  var tip = this.getTooltipElement()
+
+  var placement = typeof this.options.placement === 'function'
+    ? this.options.placement.call(this, tip, this.element)
+    : this.options.placement
+
+  var autoToken = /\s?auto?\s?/i
+  var autoPlace = autoToken.test(placement)
+  if (autoPlace) placement = placement.replace(autoToken, '') || 'top'
+
+  tip.classList.add(placement)
+
+  var pos = this.element.getBoundingClientRect()
+  var actualWidth = tip.offsetWidth
+  var actualHeight = tip.offsetHeight
+
+  if (autoPlace) {
+    var orgPlacement = placement
+    var viewportDim = this.viewport.getBoundingClientRect()
+
+    placement = placement === 'bottom' && pos.bottom + actualHeight > viewportDim.bottom ? 'top'
+              : placement === 'top' && pos.top - actualHeight < viewportDim.top ? 'bottom'
+              : placement === 'right' && pos.right + actualWidth > viewportDim.width ? 'left'
+              : placement === 'left' && pos.left - actualWidth < viewportDim.left ? 'right'
+              : placement
+
+    tip.classList.remove(orgPlacement)
+    tip.classList.add(placement)
+  }
+
+  var calculatedOffset = this.getCalculatedOffset(placement, pos, actualWidth, actualHeight)
+  this.applyPlacement(calculatedOffset, placement)
 }
 
 function extend () {

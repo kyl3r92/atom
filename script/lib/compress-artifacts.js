@@ -3,32 +3,33 @@
 const fs = require('fs-extra')
 const path = require('path')
 const spawnSync = require('./spawn-sync')
+const { path7za } = require('7zip-bin')
 
 const CONFIG = require('../config')
 
 module.exports = function (packagedAppPath) {
-  let appArchiveName
-  if (process.platform === 'darwin') {
-    appArchiveName = 'atom-mac.zip'
-  } else if (process.platform === 'win32') {
-    appArchiveName = 'atom-windows.zip'
-  } else {
-    let arch
-    if (process.arch === 'ia32') {
-      arch = 'i386'
-    } else if (process.arch === 'x64') {
-      arch = 'amd64'
-    } else {
-      arch = process.arch
-    }
-    appArchiveName = `atom-${arch}.tar.gz`
-  }
-  const appArchivePath = path.join(CONFIG.buildOutputPath, appArchiveName)
+  const appArchivePath = path.join(CONFIG.buildOutputPath, getArchiveName())
   compress(packagedAppPath, appArchivePath)
 
   if (process.platform === 'darwin') {
     const symbolsArchivePath = path.join(CONFIG.buildOutputPath, 'atom-mac-symbols.zip')
     compress(CONFIG.symbolsPath, symbolsArchivePath)
+  }
+}
+
+function getArchiveName () {
+  switch (process.platform) {
+    case 'darwin': return 'atom-mac.zip'
+    case 'win32': return `atom-${process.arch === 'x64' ? 'x64-' : ''}windows.zip`
+    default: return `atom-${getLinuxArchiveArch()}.tar.gz`
+  }
+}
+
+function getLinuxArchiveArch () {
+  switch (process.arch) {
+    case 'ia32': return 'i386'
+    case 'x64' : return 'amd64'
+    default: return process.arch
   }
 }
 
@@ -44,7 +45,7 @@ function compress (inputDirPath, outputArchivePath) {
     compressCommand = 'zip'
     compressArguments = ['-r', '--symlinks']
   } else if (process.platform === 'win32') {
-    compressCommand = '7z.exe'
+    compressCommand = path7za
     compressArguments = ['a', '-r']
   } else {
     compressCommand = 'tar'
